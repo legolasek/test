@@ -159,6 +159,8 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("Key-Bot")
         self.setWindowIcon(QIcon("icon.png"))
 
+        self.bearer_token = ""
+
         # Logo Label
         self.logo_label = QLabel(self)
         self.logo_label.setGeometry(290, 20, 220, 100)
@@ -218,7 +220,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Error", "Bearer token is missing!")
             return
 
-        bot = BattleBot()
+        bot = BattleBot(bearer_token=self.bearer_token)
         bot.bearer_token = bearer_token
         bot.log_update.connect(self.update_log)
 
