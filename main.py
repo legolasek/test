@@ -7,20 +7,9 @@ from yaml import SafeLoader
 import time
 from datetime import timedelta
 from fake_useragent import UserAgent
-from pystyle import Colors, Colorate, Center
-from PyQt5.QtWidgets import QApplication, QMainWindow, QTextEdit, QLabel, QPushButton, QMessageBox, QFileDialog
-from PyQt5.QtGui import QIcon, QPixmap, QColor
-from PyQt5.QtCore import Qt
-from PyQt5.QtCore import pyqtSignal, QObject
-from PIL import ImageTk, Image
-import webbrowser
-import threading
-from threading import Thread
-from pyupdater.client import Client
-from pyupdater import settings
-import tempfile
-import shutil
-import stat
+from PyQt5.QtWidgets import QMainWindow, QApplication, QPushButton, QTextEdit, QLineEdit, QFileDialog
+from PyQt5.QtGui import QIcon
+from PyQt5.QtCore import Qt, pyqtSignal, QObject, QThread
 
 wersja = "0.1.2"
 
@@ -81,205 +70,141 @@ class BattleBot(QObject):
                 self.bearer_token = config.get("bearer_token", "")
                 self.sleep_interval = config.get("sleep_interval", 1)
                 self.ticket_cost_threshold = config.get("ticket_cost_threshold", 1000)
-                self.ratelimit_sleep = config.get("ratelimit_sleep", 1)
-        except FileNotFoundError:
-            with open("config.yaml", "w") as f:
-                f.write(default_config)
-            self.load_config()
+                self.ratelimit_sleep = config.get("ratelimit_sleep", 15)
+        except Exception as e:
+            self.log_update.emit(f"<span style='color: red'>Błąd wczytywania pliku konfiguracyjnego:</span> {e}")
 
     def save_config(self):
-        config = {
-            "bearer_token": self.bearer_token,
-            "sleep_interval": self.sleep_interval,
-            "ticket_cost_threshold": self.ticket_cost_threshold,
-            "ratelimit_sleep": self.ratelimit_sleep
-        }
-        with open("config.yaml", "w") as f:
-            yaml.dump(config, f)
+        try:
+            config = {
+                "bearer_token": self.bearer_token,
+                "sleep_interval": self.sleep_interval,
+                "ticket_cost_threshold": self.ticket_cost_threshold,
+                "ratelimit_sleep": self.ratelimit_sleep
+            }
+            with open("config.yaml", "w") as f:
+                yaml.dump(config, f)
+                self.log_update.emit(f"<span style='color: green'>Konfiguracja została zapisana do pliku config.yaml</span>")
+        except Exception as e:
+            self.log_update.emit(f"<span style='color: red'>Błąd zapisu pliku konfiguracyjnego:</span> {e}")
+
+    def join_battles(self):
+        while True:
+            try:
+                response = self.session.get(self.active_battles_url)
+                if response.status_code == 200:
+                    data = response.json()
+                    battles = data.get("battles", [])
+                    for battle in battles:
+                        battle_id = battle.get("id")
+                        ticket_cost = battle.get("ticketCost")
+                        if ticket_cost <= self.ticket_cost_threshold:
+                            join_data = {
+                                "caseBattleId": battle_id,
+                                "team": "a"
+                            }
+                            response = self.session.post(self.join_battle_url, json=join_data)
+                            if response.status_code == 200:
+                                self.log_update.emit(f"Joined battle: {battle_id}")
+                            else:
+                                self.log_update.emit(f"<span style='color: red'>Failed to join battle: {battle_id}</span>")
+                        else:
+                            self.log_update.emit(f"Battle cost too high: {battle_id}")
+                else:
+                    self.log_update.emit(f"<span style='color: red'>Failed to fetch active battles</span>")
+            except Exception as e:
+                self.log_update.emit(f"<span style='color: red'>Error during join_battles:</span> {e}")
+
+            time.sleep(self.sleep_interval)
 
     def start(self):
-        self.log_update.emit("Starting BattleBot")
-        if not self.bearer_token:
-            self.log_update.emit("Bearer Token cannot be empty!")
-            return
+        self.log_update.emit(f"<span style='color: green'>Key-Bot wersja {wersja} by legolasek</span>")
+        self.log_update.emit(f"<span style='color: green'>Aby zatrzymać program, naciśnij CTRL+C</span>")
+        self.join_battles()
 
-        while self.running:
-            self.log_update.emit("Checking for battles")
-            try:
-                headers = {
-                    "Host": "kdrp2.com",
-                    "Origin": "https://key-drop.com",
-                    "Referer": "https://key-drop.com/",
-                    "authorization": f"Bearer {self.bearer_token}",
-                    "content-type": "application/json"
-                }
-                with requests.Session() as session:
-                    session.headers.update(headers)
-                    response = session.get(self.active_battles_url)
-                    if response.status_code != 200:
-                        self.log_update.emit(f"Received unexpected status code: {response.status_code}")
-                        self.log_update.emit(f"Response text: {response.text}")
-                    else:
-                        data = response.json()
-                        self.log_update.emit(f"Received data: {data}")
-                        battles = data.get("battles", [])
-                        for battle in battles:
-                            if battle["cost"] == 0:
-                                self.log_update.emit(f"Joining battle: {battle}")
-                                response = session.post(f"{self.join_battle_url}/{battle['id']}/join")
-                                if response.status_code != 200:
-                                    self.log_update.emit(f"Failed to join battle: {response.text}")
-                                    continue
-                                else:
-                                    self.log_update.emit(f"Successfully joined battle: {battle}")
-                                    battle_data = response.json()
-                                    self.log_update.emit(f"Received battle data: {battle_data}")
-                                    battle_id = battle_data.get("battle_id", "")
-                                    battle_link = f"https://key-drop.com/battle/{battle_id}"
-                                    self.log_update.emit(f"Battle link: {battle_link}")
-                                    webbrowser.open(battle_link)
-                                    self.log_update.emit("Waiting for the battle to end...")
-                                    time.sleep(self.sleep_interval)
-                                break
-                self.log_update.emit("No battles found. Waiting for the next check...")
-                time.sleep(self.sleep_interval)
-            except requests.RequestException as e:
-                self.log_update.emit(f"An error occurred: {e}")
-                time.sleep(self.ratelimit_sleep)
 
-    def stop(self):
-        self.log_update.emit("Stopping BattleBot")
-        self.running = False
-
-class MainWindow(QMainWindow):
+class BattleBotApp(QMainWindow):
     def __init__(self):
-        self.running = True
         super().__init__()
-
         self.setWindowTitle("Key-Bot")
         self.setWindowIcon(QIcon("icon.png"))
+        self.setGeometry(100, 100, 400, 500)
+        self.setFixedSize(400, 700)
+        self.setStyleSheet("background-color: #222; color: #FFF; font-size: 16px;")
+        self.init_ui()
+        self.bot = None
 
-        self.bearer_token = ""
+    def init_ui(self):
+        self.status_bar = self.statusBar()
+        self.status_bar.setStyleSheet("color: #FFF; font-size: 14px;")
+        self.status_bar.showMessage("Key-Bot v" + wersja + " by legolasek", 5000)
 
-        # Logo Label
-        self.logo_label = QLabel(self)
-        self.logo_label.setGeometry(290, 20, 220, 100)
-        pixmap = QPixmap("logo.png")
-        self.logo_label.setPixmap(pixmap.scaled(220, 100, Qt.KeepAspectRatio))
-        self.logo_label.setAlignment(Qt.AlignCenter)
+        self.token_input = QLineEdit(self)
+        self.token_input.setGeometry(20, 420, 360, 30)
+        self.token_input.setStyleSheet("background-color: #FFF; color: #000; font-size: 14px;")
 
-        # Log Text Edit
-        self.log_text_edit = QTextEdit(self)
-        self.log_text_edit.setGeometry(20, 140, 760, 350)
-        self.log_text_edit.setReadOnly(True)
+        self.log_output = QTextEdit(self)
+        self.log_output.setGeometry(20, 20, 360, 380)
+        self.log_output.setStyleSheet("background-color: #000; color: #FFF; font-size: 12px;")
+        self.log_output.setReadOnly(True)
 
-        # Bearer Token Label
-        self.bearer_token_label = QLabel(self)
-        self.bearer_token_label.setGeometry(20, 510, 150, 30)
-        self.bearer_token_label.setText("Bearer Token:")
+        self.clear_log_button = QPushButton("Wyczyść log", self)
+        self.clear_log_button.setGeometry(20, 420, 160, 60)
+        self.clear_log_button.setStyleSheet("background-color: #444; color: #FFF; font-size: 16px;")
+        self.clear_log_button.clicked.connect(self.clear_log)
 
-        # Bearer Token Text Edit
-        self.bearer_token_text_edit = QTextEdit(self)
-        self.bearer_token_text_edit.setGeometry(20, 540, 550, 30)
+        self.save_config_button = QPushButton("Zapisz konfigurację", self)
+        self.save_config_button.setGeometry(220, 420, 160, 60)
+        self.save_config_button.setStyleSheet("background-color: #444; color: #FFF; font-size: 16px;")
+        self.save_config_button.clicked.connect(self.save_config)
 
-        # Battle-bot Button
-        self.battle_bot_button = QPushButton("Battle-bot", self)
-        self.battle_bot_button.setGeometry(20, 580, 150, 30)
-        self.battle_bot_button.clicked.connect(self.start_battle_bot)
+        self.load_config_button = QPushButton("Wczytaj konfigurację", self)
+        self.load_config_button.setGeometry(20, 480, 160, 60)
+        self.load_config_button.setStyleSheet("background-color: #444; color: #FFF; font-size: 16px;")
+        self.load_config_button.clicked.connect(self.load_config)
 
-        # Wkrótce Button
-        self.wkrotce_button = QPushButton("Wkrótce", self)
-        self.wkrotce_button.setGeometry(190, 580, 150, 30)
-        self.wkrotce_button.setDisabled(True)
+        self.start_button = QPushButton("Start", self)
+        self.start_button.setGeometry(220, 480, 160, 60)
+        self.start_button.setStyleSheet("background-color: #080; color: #FFF; font-size: 24px;")
+        self.start_button.clicked.connect(self.start_bot)
 
-        # Edytuj Konfigurację Button
-        self.edytuj_konfiguracje_button = QPushButton("Edytuj Konfigurację", self)
-        self.edytuj_konfiguracje_button.setGeometry(360, 580, 150, 30)
-        self.edytuj_konfiguracje_button.clicked.connect(self.edit_config)
+    def save_config(self):
+        if self.bot:
+            self.bot.save_config()
+        else:
+            self.log_output.append("<span style='color: red'>Nie udało się zapisać konfiguracji. Bot nie został jeszcze uruchomiony.</span>")
 
-        # Aktualizacja Button
-        self.aktualizacja_button = QPushButton("Aktualizacja", self)
-        self.aktualizacja_button.setGeometry(530, 580, 150, 30)
-        self.aktualizacja_button.clicked.connect(self.update_application)
+    def load_config(self):
+        if self.bot:
+            self.bot.load_config()
+        else:
+            self.log_output.append("<span style='color: red'>Nie udało się wczytać konfiguracji. Bot nie został jeszcze uruchomiony.</span>")
 
-        # Wyjście Button
-        self.wyjscie_button = QPushButton("Wyjście", self)
-        self.wyjscie_button.setGeometry(700, 580, 80, 30)
-        self.wyjscie_button.clicked.connect(self.close)
-
-        # Github Link Label
-        self.github_link_label = QLabel(self)
-        self.github_link_label.setGeometry(20, 560, 150, 20)
-        self.github_link_label.setText("<a href='https://github.com/legolasek/Key-Bot.git'>Github</a>")
-        self.github_link_label.setOpenExternalLinks(True)
-
-    def start_battle_bot(self):
-        bearer_token = self.bearer_token_text_edit.toPlainText()
-
+    def start_bot(self):
+        bearer_token = self.token_input.text()
         if not bearer_token:
-            QMessageBox.warning(self, "Error", "Bearer token is missing!")
+            self.log_output.append("<span style='color: red'>Bearer token jest wymagany.</span>")
             return
+        self.bot = BattleBot(bearer_token)
+        self.bot.log_update.connect(self.update_log)
+        self.bot_thread = QThread()
+        self.bot.moveToThread(self.bot_thread)
+        self.bot_thread.started.connect(self.bot.start)
+        self.bot_thread.start()
 
-        bot = BattleBot(bearer_token=self.bearer_token)
-        bot.bearer_token = bearer_token
-        bot.log_update.connect(self.update_log)
+    def update_log(self, text):
+        self.log_output.append(text)
 
-        thread = threading.Thread(target=bot.start)
-        thread.start()
+    def clear_log(self):
+        self.log_output.clear()
 
-    def update_log(self, message):
-        print(f"Received log message: {message}")
-        self.log_text_edit.append(message)
 
-    def edit_config(self):
-        config_file,_=QFileDialog.getOpenFileName(self,"Select Config File","","YAML Files (*.yaml)")
-        if config_file:
-            os.system(f'notepad "{config_file}"') 
-
-    def update_application(self):
-        self.aktualizacja_button.setDisabled(True) 
-        threading.Thread(target=self.update_thread).start() 
-
-    def update_thread(self):
-        temp_dir=tempfile.mkdtemp() 
-        client=Client(settings) 
-
-        try:
-            client.refresh() 
-            app_update=client.update_check("Key-Bot",wersja) 
-
-            if app_update:
-                self.log_text_edit.append(f"{QColor(Qt.green).name()}Updating application...") 
-                client.download_update(app_update,temp_dir) 
-
-                self.log_text_edit.append(f"{QColor(Qt.green).name()}Installing update...") 
-                client.extract_update(app_update,temp_dir) 
-
-                self.log_text_edit.append(f"{QColor(Qt.green).name()}Restarting application...") 
-                sleep(2) 
-
-                self.log_text_edit.clear() 
-                shutil.rmtree(temp_dir,onerror=self.remove_readonly) 
-
-                python=sys.executable 
-                os.execl(python,
-                python,*sys.argv) 
-            else:
-                self.log_text_edit.append(f"{QColor(Qt.yellow).name()}No updates available.") 
-        except Exception as e:
-            self.log_text_edit.append(f"{QColor(Qt.red).name()}Error occurred during update: {str(e)}") 
-
-            self.aktualizacja_button.setEnabled(True) 
-
-    def remove_readonly(self,
-        func,path,
-        excinfo): 
-        os.chmod(path,
-        stat.S_IWRITE) 
-        func(path) 
-
-if __name__ == "__main__":
+def main():
     app = QApplication(sys.argv)
-    window = MainWindow()
+    window = BattleBotApp()
     window.show()
     sys.exit(app.exec_())
+
+
+if __name__ == "__main__":
+    main()
