@@ -105,15 +105,17 @@ class BattleBot(QObject):
                             }
                             response = self.session.post(self.join_battle_url, json=join_data)
                             if response.status_code == 200:
-                                self.log_update.emit(f"Joined battle: {battle_id}")
+                                self.log_update.emit(f"Znaleziono darmową bitwę o ID: {battle_id}")
+                                self.log_update.emit(f"Skrzynka: {battle.get('name')}")
+                                self.log_update.emit("Próbuję dołączyć do bitwy")
                             else:
-                                self.log_update.emit(f"<span style='color: red'>Failed to join battle: {battle_id}</span>")
+                                self.log_update.emit(f"<span style='color: red'>Błąd podczas dołączania do bitwy: {battle_id}</span>")
                         else:
-                            self.log_update.emit(f"Battle cost too high: {battle_id}")
+                            self.log_update.emit(f"Koszt bitwy zbyt wysoki: {battle_id}")
                 else:
-                    self.log_update.emit(f"<span style='color: red'>Failed to fetch active battles</span>")
+                    self.log_update.emit(f"<span style='color: red'>Błąd podczas pobierania aktywnych bitew</span>")
             except Exception as e:
-                self.log_update.emit(f"<span style='color: red'>Error during join_battles:</span> {e}")
+                self.log_update.emit(f"<span style='color: red'>Błąd podczas dołączania do bitew:</span> {e}")
 
             time.sleep(self.sleep_interval)
 
@@ -132,7 +134,6 @@ class BattleBotApp(QMainWindow):
         self.setFixedSize(400, 700)
         self.setStyleSheet("background-color: #222; color: #FFF; font-size: 16px;")
         self.init_ui()
-        self.bot = None
 
     def init_ui(self):
         self.status_bar = self.statusBar()
@@ -168,23 +169,17 @@ class BattleBotApp(QMainWindow):
         self.start_button.setStyleSheet("background-color: #080; color: #FFF; font-size: 24px;")
         self.start_button.clicked.connect(self.start_bot)
 
+    def clear_log(self):
+        self.log_output.clear()
+
     def save_config(self):
-        if self.bot:
-            self.bot.save_config()
-        else:
-            self.log_output.append("<span style='color: red'>Nie udało się zapisać konfiguracji. Bot nie został jeszcze uruchomiony.</span>")
+        self.bot.save_config()
 
     def load_config(self):
-        if self.bot:
-            self.bot.load_config()
-        else:
-            self.log_output.append("<span style='color: red'>Nie udało się wczytać konfiguracji. Bot nie został jeszcze uruchomiony.</span>")
+        self.bot.load_config()
 
     def start_bot(self):
         bearer_token = self.token_input.text()
-        if not bearer_token:
-            self.log_output.append("<span style='color: red'>Bearer token jest wymagany.</span>")
-            return
         self.bot = BattleBot(bearer_token)
         self.bot.log_update.connect(self.update_log)
         self.bot_thread = QThread()
@@ -194,9 +189,6 @@ class BattleBotApp(QMainWindow):
 
     def update_log(self, text):
         self.log_output.append(text)
-
-    def clear_log(self):
-        self.log_output.clear()
 
 
 def main():
